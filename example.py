@@ -25,6 +25,7 @@ Text blocks support [Markdown formatting][1], for example:
 - Hyperlinks
 - Inline `code()` snippets
 - **Bold** and *italic*
+- LaTeX math $f(x)=x^2$
 
 [1]: https://commonmark.org/help/
 """
@@ -82,6 +83,11 @@ Hide code from the handout with the `# handout: exclude` comment:
 
 # Invisible below:
 value = 13  # handout: exclude
+
+"""
+Exclude whole ranges between `# handout: begin-exclude` and `# handout:
+end-exclude` lines.
+"""
 
 """
 ## View the handout

@@ -2,19 +2,32 @@ import collections
 import inspect
 import io
 import logging
-import os
+import pathlib
 import shutil
 
 from handout import blocks
 
 
+MATHJAX_SCRIPTS = (
+    '<script type="text/x-mathjax-config">'
+    'MathJax.Hub.Config({tex2jax: {inlineMath: [["$","$"]]}});'
+    '</script>'
+    '<script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/'
+    'MathJax.js?config=TeX-MML-AM_CHTML" async></script>'
+)
+
+
 class Handout(object):
 
-  def __init__(self, directory):
-    self._directory = os.path.expanduser(directory)
-    os.makedirs(self._directory, exist_ok=True)
+  def __init__(self, directory, title='Handout'):
+    self._directory = pathlib.Path(directory).expanduser()
+    self._directory.mkdir(parents=True, exist_ok=True)
+    self._title = title
     self._blocks = collections.defaultdict(list)
     self._pending = []
+    # The logger is configured in handout/__init__.py to make it available
+    # right after importing the handout package. This allows the user to change
+    # the logging level, message format, etc.
     self._logger = logging.getLogger('handout')
     for info in inspect.stack():
       if info.filename == __file__:
@@ -39,30 +52,26 @@ class Handout(object):
     if message.endswith('\n'):
       message = message[:-1]
     self._logger.info(message)
-    if show:
-      self.show()
 
-  def add_image(self, image, format='png', width=None, show=False):
+  def add_image(self, image, format='png', width=None):
     if isinstance(image, str):
       filename = image
     else:
       import imageio
       filename = 'image-{}.{}'.format(self._num_images, format)
-      imageio.imsave(os.path.join(self._directory, filename), image)
+      imageio.imsave(self._directory / filename, image)
       self._logger.info('Saved image: {}'.format(filename))
     block = blocks.Image(filename, width)
     self._pending.append(block)
     self._num_images += 1
-    if show:
-      self.show()
 
-  def add_video(self, video, format='gif', fps=30, width=None, show=False):
+  def add_video(self, video, format='gif', fps=30, width=None):
     if isinstance(video, str):
       filename = video
     else:
       import imageio
       filename = 'video-{}.{}'.format(self._num_videos, format)
-      imageio.mimsave(os.path.join(self._directory, filename), video, fps=fps)
+      imageio.mimsave(self._directory / filename, video, fps=fps)
       self._logger.info('Saved video: {}'.format(filename))
     if filename.endswith('.gif'):
       block = blocks.Image(filename, width)
@@ -70,50 +79,44 @@ class Handout(object):
       block = blocks.Video(filename, width)
     self._pending.append(block)
     self._num_videos += 1
-    if show:
-      self.show()
 
-  def add_html(self, string, show=False):
+  def add_html(self, string):
     block = blocks.Html([string])
     self._pending.append(block)
     self._logger.info(string)
-    if show:
-      self.show()
 
-  def add_figure(self, figure, width=None, show=False):
+  def add_figure(self, figure, width=None):
     filename = 'figure-{}.png'.format(self._num_figures)
     block = blocks.Image(filename, width)
     self._pending.append(block)
-    filename = os.path.join(self._directory, filename)
+    filename = self._directory / filename
     figure.savefig(filename)
     self._logger.info('Saved figure: {}'.format(filename))
     self._num_figures += 1
-    if show:
-      self.show()
 
   def show(self):
     self._blocks[self._get_current_line()] += self._pending
     self._pending = []
     output = self._generate(self._source_text)
-    filename = os.path.join(self._directory, 'index.html')
+    filename = self._directory / 'index.html'
     with open(filename, 'w') as f:
       f.write(output)
-    datadir = os.path.join(os.path.dirname(__file__), 'data')
-    names = [
-        'style.css', 'highlight.css', 'highlight.js', 'marked.js', 'script.js',
-        'favicon.ico']
-    for name in names:
-      shutil.copyfile(
-          os.path.join(datadir, name),
-          os.path.join(self._directory, name))
+    datadir = pathlib.Path(__file__).parent / 'data'
+    for source in datadir.glob('**/*'):
+      target = self._directory / source.relative_to(datadir)
+      if source.is_dir() or target.exists():
+        continue
+      target.parent.mkdir(exist_ok=True)
+      shutil.copyfile(source, target)
     self._logger.info("Handout written to: {}".format(filename))
 
   def _generate(self, source):
     content = []
     content.append(blocks.Html([
+        '<!DOCTYPE html>',
         '<html>',
         '<head>',
-        '<title>Handout</title>',
+        '<title>{}</title>'.format(self._title),
         '<link rel="stylesheet" href="style.css">',
         '<link rel="stylesheet" href="highlight.css">',
         '<link rel="shortcut icon" type="image/x-icon" href="favicon.ico">',
@@ -121,11 +124,13 @@ class Handout(object):
         '<script src="script.js"></script>',
         '<script src="highlight.js"></script>',
         '<script>hljs.initHighlightingOnLoad();</script>',
+        MATHJAX_SCRIPTS,
         '</head>',
         '<body>',
         '<article>',
     ]))
     content.append(blocks.Code())
+    excluding = False  # Range exclude.
     for lineno, line in enumerate(source.split('\n')):
       lineno += 1  # Line numbers are 1-based indices.
       line = line.rstrip()
@@ -137,7 +142,17 @@ class Handout(object):
         content[-1].append(line)
         content.append(blocks.Code())
         continue
-      if not line.endswith('# handout: exclude'):
+      if isinstance(content[-1], blocks.Text):
+        content[-1].append(line)
+      elif line == '# handout: begin-exclude':
+        excluding = True
+      elif line == '# handout: end-exclude':
+        excluding = False
+      elif excluding:
+        pass
+      elif line.endswith('# handout: exclude'):
+        pass
+      else:
         content[-1].append(line)
       blocks_ = self._blocks[lineno]
       if blocks_:
